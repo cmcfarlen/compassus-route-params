@@ -101,6 +101,7 @@
 (defn recurse-parser
   [{:keys [parser target query state ast] :as env}]
   (let [q (parser env query target)]
+    (println "recursive parser response: " q)
     (if (or (empty? q) (nil? target))
       {:value q}
       {target (assoc ast :query q)})))
@@ -125,7 +126,8 @@
 (defmethod local-read :related
   [{:keys [target query state ast]} k params]
   (println "local read related " query)
-  (let [st @state
+  nil
+  #_(let [st @state
         focus-item (:focus-item st)
         item (get-in st [:item/by-id focus-item])
         related-to (:item/name item)
@@ -254,7 +256,11 @@
                                                                    (cb rewritten remote)))
                                                          :parser (om/parser {:read local-read :mutate local-mutate})} })))
 
-(compassus/mount! app (gdom/getElement "app"))
+(defn main
+  []
+  (compassus/mount! app (gdom/getElement "app")))
+
+(defonce done-main (main))
 
 (comment
 
@@ -268,6 +274,6 @@
  (pushy/set-token! history "/item/3")
 
  (pushy/get-token history)
-(println (pr-str (-> (compassus/get-reconciler app) :config :state)))
+ (println (pr-str (-> (compassus/get-reconciler app) :config :state)))
  )
 
