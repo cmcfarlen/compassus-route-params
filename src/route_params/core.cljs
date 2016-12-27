@@ -6,15 +6,11 @@
    [compassus.core :as compassus]
    [bidi.bidi :as bidi]
    [cljs.reader :as edn]
-   [pushy.core :as pushy]))
+   [pushy.core :as pushy]
+   [cemerick.url :as url]
+   ))
 
 (enable-console-print!)
-
-(declare history)
-
-(def bidi-routes
-  ["/" {"" :item-list-page
-        "item/" {[:item-id] :item-details}}])
 
 (defui Item
   static om/Ident
@@ -38,26 +34,10 @@
 
 (def item (om/factory Item {:keyfn :item/id}))
 
-(defui RelatedInfo
-  static om/IQuery
-  (query [this]
-    [:related/to {:related/info [:related/a :related/b]}])
-  Object
-  (render [this]
-    (let [props (om/props this)]
-      (println "render Related")
-      (dom/div nil
-        (dom/h4 nil (str "Related Info (to " (:related/to props) ")"))
-        (dom/p nil (:related/a (:related/info props)))
-        (dom/p nil (:related/b (:related/info props)))))))
-
-(def related-info (om/factory RelatedInfo))
-
 (defui ItemDetailsPage
   static om/IQuery
   (query [this]
-    [{:item (om/get-query Item)}
-     {:related (om/get-query RelatedInfo)}])
+    [{:item (om/get-query Item)}])
   Object
   (render [this]
     (let [props (om/props this)]
@@ -65,8 +45,7 @@
       (dom/div nil
         (dom/h1 nil "Item Details Page")
         (item (:item props))
-        (if-let [r (:related props)]
-          (related-info r))))))
+        ))))
 
 (defui ItemEntry
   static om/Ident
@@ -93,6 +72,7 @@
     (let [props (om/props this)]
       (println "render ItemListPage: " props)
       (dom/div nil
+        (dom/h3 nil "Items")
         (apply dom/ul nil (map item-entry (:items props)))))))
 
 (defmulti local-read om/dispatch)
@@ -123,24 +103,6 @@
       {:value (om/db->tree query item st)}
       {target (assoc ast :query-root true :params {:item-id focus-item})})))
 
-(defmethod local-read :related
-  [{:keys [target query state ast]} k params]
-  (println "local read related " query)
-  nil
-  #_(let [st @state
-        focus-item (:focus-item st)
-        item (get-in st [:item/by-id focus-item])
-        related-to (:item/name item)
-        related (om/db->tree query (:related st) st)
-        current-related-to (:related/to related)]
-    (println "related target: " target " item:  " related-to " current: " current-related-to)
-    (if (and related
-             related-to
-             (= current-related-to related-to))
-      {:value related}
-      (if related-to ; only ask remote after we know the item
-        {target (assoc ast :query-root true :params {:item/name related-to})}))))
-
 (defmethod local-read :items
   [{:keys [query state target ast]} k param]
   (println "local read items: " query)
@@ -158,7 +120,7 @@
   [{:keys [query state ast target] :as env} k params]
   (recurse-parser env))
 
-(defmethod local-mutate 'route/set-params
+(defmethod local-mutate 'app/set-params
   [{:keys [state route]} k params]
   (println "set-params: " params route)
   (when (= (:handler params) :item-details)
@@ -172,24 +134,6 @@
   {:action (fn []
              (swap! state update-in ref merge params))})
 
-(def routes
-  {:item-list-page (compassus/index-route ItemListPage)
-   :item-details ItemDetailsPage})
-
-(defn wrapper [{:keys [owner factory props]}]
-  (dom/div nil
-    (factory props)))
-
-(declare app)
-
-(def history
-  (pushy/pushy #(do
-                 (println "pushy: " %)
-                 (om/transact! (compassus/get-reconciler app) [(list 'route/set-params %)])
-                 (compassus/set-route! app (:handler %))) (partial bidi/match-route bidi-routes)))
-
-
-
 (def item-data
   (reduce (fn [m v]
             (assoc m (:item/id v) v)) {}
@@ -200,12 +144,6 @@
            {:item/name "item-5" :item/id 5 :item/description "This is item 5"}
            {:item/name "item-6" :item/id 6 :item/description "This is item 6"}
            {:item/name "item-7" :item/id 7 :item/description "This is item 7"}]))
-
-(def related-data
-  {"item-1" {:related/a "item-1 related a" :related/b "item-1 related b"}
-   "item-3" {:related/a "item-3 related a" :related/b "item-3 related b"}
-   "item-5" {:related/a "item-5 related a" :related/b "item-5 related b"}
-   "item-7" {:related/a "item-7 related a" :related/b "item-7 related b"}})
 
 (defmulti pretend-remote-read om/dispatch)
 
@@ -225,36 +163,80 @@
   (println "remote reading item: " query params)
   {:value (get item-data (:item-id params))})
 
-(defmethod pretend-remote-read :related
-  [{:keys [query]} k params]
-  (println "remote reading related: " query params)
-  {:value {:related/to (:item/name params)
-           :related/info (get related-data (:item/name params))}})
-
 (defn merge-fn
   [a b]
   (if (map? a)
     (merge-with merge-fn a b)
     b))
 
-(defonce app (let [remote-parser (om/parser {:read pretend-remote-read})]
-               (compassus/application {:routes routes
-                                       :wrapper wrapper
-                                       :history {:setup #(pushy/start! history)
-                                                 :teardown #(pushy/stop! history)}
-                                       :reconciler-opts {:state (atom {})
-                                                         :merge-tree merge-fn
-                                                         :merge compassus/compassus-merge
-                                                         :normalize true
-                                                         :pathopt true
-                                                         :send (fn [{:keys [remote]} cb]
-                                                                 (println "query for remote: " remote)
-                                                                 (let [{:keys [query rewrite]} (om/process-roots remote)
-                                                                       remote-result (remote-parser {} query)
-                                                                       rewritten (rewrite remote-result)]
-                                                                   (println "remote-result: " remote-result " rewritten: " rewritten)
-                                                                   (cb rewritten remote)))
-                                                         :parser (om/parser {:read local-read :mutate local-mutate})} })))
+(defn query-params
+  [href]
+  (let [u (url/url href)]
+    (reduce-kv (fn [c k v]
+                 (assoc c (keyword k) v)) {}  (:query u))))
+
+(defn wrapper [{:keys [owner factory props]}]
+  (dom/div nil
+    (dom/h1 nil "Wrapper")
+    (factory props)))
+
+(def bidi-routes
+  ["/" {"" :item-list-page
+        "item/" {[:item-id] :item-details}}])
+
+(def routes
+  {:item-list-page ItemListPage
+   :item-details ItemDetailsPage})
+
+(defn create-app
+  [{:keys [routes index-route bidi-routes wrapper init-state]
+    :or {init-state {}
+         index-route :index}}]
+  (let [history (atom nil)
+        remote-parser (om/parser {:read pretend-remote-read})
+        reconciler (om/reconciler
+                    {:state init-state
+                     :normalize true
+                     :pathopt true
+                     :shared {:navigate (fn [path] (pushy/set-token! @history path))}
+                     :send (fn [{:keys [remote]} cb]
+                             (println "query for remote: " remote)
+                             (let [{:keys [query rewrite]} (om/process-roots remote)
+                                   remote-result (remote-parser {} query)
+                                   rewritten (rewrite remote-result)]
+                               (println "remote-result: " remote-result " rewritten: " rewritten)
+                               (cb rewritten remote)))
+                     :parser (compassus/parser {:read local-read :mutate local-mutate :route-dispatch false})
+                     :merge-tree merge-fn})]
+    (compassus/application
+     {:routes routes
+      :index-route (or (:handler (bidi/match-route bidi-routes (.. js/window -location -pathname)))
+                       index-route)
+      :reconciler reconciler
+      :mixins (cond->
+                [(compassus.core/will-mount
+                  (fn [c]
+                    (let [h (pushy/pushy (fn [r]
+                                           (compassus/set-route! c
+                                                                 (:handler r)
+                                                                 {:tx [(list 'app/set-params
+                                                                             (assoc r
+                                                                                    :query-params
+                                                                                    (query-params (.. js/window -location -href))))]}))
+                                         (fn [m]
+                                           (bidi/match-route bidi-routes m)))]
+                      (reset! history h)
+                      (pushy/start! h))))
+                 (compassus.core/will-unmount #(pushy/stop! @history))]
+
+                wrapper
+                (conj (compassus/wrap-render wrapper)))
+      })))
+
+(defonce app (create-app {:routes routes
+                          :index-route :item-list-page
+                          :bidi-routes bidi-routes
+                          :wrapper wrapper}))
 
 (defn main
   []
@@ -264,16 +246,15 @@
 
 (comment
 
- ((:parser (:config (compassus/get-reconciler app))) {:state (-> (compassus/get-reconciler app) :config :state)} (om/get-query (om/app-root (compassus/get-reconciler app))))
+ (deref (compassus/get-reconciler app))
 
- (compassus/set-route! app :home)
- (compassus/set-route! app :about)
- (pushy/set-token! history "/")
- (pushy/set-token! history "/item/42")
- (pushy/set-token! history "/item/7")
- (pushy/set-token! history "/item/3")
+ (let [reconciler (compassus/get-reconciler app)
+       parser (-> reconciler :config :parser)
+       st (-> reconciler :config :state)]
+   (parser {:state st} (om/get-query (om/app-root reconciler))))
 
- (pushy/get-token history)
- (println (pr-str (-> (compassus/get-reconciler app) :config :state)))
+ (let [navigate (:navigate (om/shared (om/app-root (compassus/get-reconciler app))))]
+   (navigate "/item/1"))
+
  )
 

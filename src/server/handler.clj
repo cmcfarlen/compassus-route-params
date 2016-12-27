@@ -3,9 +3,10 @@
             [ring.middleware.resource :refer [wrap-resource]]))
 
 (defroutes myroutes
-  (GET "*/*" [] (-> "index.html"
-                    (ring.util.response/resource-response {:root "public"})
-                    (ring.util.response/content-type "text/html"))))
+  (GET "*/*" []
+    (-> "index.html"
+        (ring.util.response/resource-response {:root "public"})
+        (ring.util.response/content-type "text/html"))))
 
 
 

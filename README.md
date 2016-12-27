@@ -1,39 +1,61 @@
 # route-params
 
-FIXME: Write a one-line description of your library/project.
+An example of using compassus for client side routing.
 
 ## Overview
 
-FIXME: Write a paragraph about the library/project and highlight its goals.
+This example is a simple item list, but it uses the url to steer the initial app state and focused item.  The pushy callback handler transacts the query parameters and the `app/set-params` mutation can be used to setup the app state for the particular "page".
+
+``` clojure
+(pushy/pushy
+ (fn [r]
+  (compassus/set-route! c
+   (:handler r)
+   {:tx [(list 'app/set-params
+           (assoc r
+            :query-params
+            (query-params (.. js/window -location -href))))]}))
+ (fn [m]
+  (bidi/match-route bidi-routes m)))
+```
+
+Then the mutation can handle the route and query params to setup the view.
+
+``` clojure
+(defmethod local-mutate 'app/set-params
+  [{:keys [state route]} k params]
+  (when (= (:handler params) :item-details)
+    {:action (fn []
+               (swap! state assoc :focus-item (edn/read-string (:item-id (:route-params params)))))}))
+```
+
+The :focus-item key can then be used the om.next queries for app state:
+
+``` clojure
+(defmethod local-read :item
+ [{:keys [target query state ast]} k params]
+ (let [st @state
+       focus-item (:focus-item st)
+       item (get-in st [:item/by-id focus-item])]
+  (if item
+   {:value (om/db->tree query item st)}
+   {target (assoc ast :query-root true :params {:item-id focus-item})})))
+```
+
+If the item is not currently in the app state then the `:remote` is invoked to fetch it from the server.
 
 ## Setup
 
-To get an interactive development environment run:
+Run `lein repl` and then:
 
-    lein figwheel
+```
+user=> (start)
+```
 
-and open your browser at [localhost:3449](http://localhost:3449/).
-This will auto compile and send all changes to the browser without the
-need to reload. After the compilation process is complete, you will
-get a Browser Connected REPL. An easy way to try it is:
-
-    (js/alert "Am I connected?")
-
-and you should see an alert in the browser window.
-
-To clean all compiled files:
-
-    lein clean
-
-To create a production build run:
-
-    lein do clean, cljsbuild once min
-
-And open your browser in `resources/public/index.html`. You will not
-get live reloading, nor a REPL. 
+Browse to http://localhost:3449 or http://localhost:3449/item/1
 
 ## License
 
-Copyright © 2014 FIXME
+Copyright © 2014 Chris McFarlen
 
 Distributed under the Eclipse Public License either version 1.0 or (at your option) any later version.
